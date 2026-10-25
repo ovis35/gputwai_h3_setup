@@ -114,7 +114,9 @@ bash h3-ctl.sh interrupt
 |---|---|---|
 | 5.875 秒 / 141 frames，冷啟動（模型經 `/vault` symlink） | 19 分 17 秒 | diffusion model 第一次載入 5 分 32 秒；取樣約 23 秒/step（約 7.5 分鐘）；VAE decode 約 6 分鐘；VRAM 約 31.7 GB，GPU 使用率 100% |
 | 同上，熱啟動（第二次執行，換 seed） | 8 分 01 秒 | 第一個 step 22 秒 |
-| 15 秒（15.083 秒） | **TODO：測試中，結果待補** | **TODO** |
+| 15.084 秒 / 362 frames，冷啟動（模型經 `/vault` symlink，page cache 已被清掉） | 1 小時 04 分 51 秒 | 提示詞編譯約 1.5 分鐘；diffusion model 載入約 22 分鐘（`/vault` 讀取只有 9–11 MB/s）；取樣約 107.6 秒/step（20 steps 約 34 分鐘，是 5.875 秒的約 4.7 倍）；VAE decode 約 6.5 分鐘；VRAM 峰值約 31.8 / 32.6 GB，沒有 OOM，GPU 使用率 100% |
+
+15 秒那次的載入時間主要卡在 `/vault`：同一台機器剛把 15.7 GB 寫回 `/vault` 又讀回比對，page cache 被擠掉，而 `/vault` 當下讀取很慢。模型在本機 SSD（`MODEL_MODE=copy`）且已載入時，同樣設定一支 15 秒估計約 42 分鐘（編譯 + 取樣 + decode），這個數字是推算，還沒實測。
 
 下載與寫入：
 
