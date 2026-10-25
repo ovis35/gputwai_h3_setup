@@ -2,6 +2,7 @@
 # GPUtw ephemeral GPU bootstrap: ComfyUI H3 + OpenH3-IR
 # Run: bash setup-h3.sh
 # Optional: MODEL_MODE=symlink bash setup-h3.sh
+# Optional: HF_FALLBACK=0 bash setup-h3.sh  (fail instead of downloading unreadable Vault files from Hugging Face)
 # Checked for Bash syntax; deployment on GPUtw requires running on that instance.
 set -Eeuo pipefail
 
@@ -17,11 +18,80 @@ OPENH3_REF="${OPENH3_REF:-main}"
 MODEL_MODE="${MODEL_MODE:-copy}"  # copy = fast local SSD; symlink = fast boot but slower model reads
 PORT="${PORT:-8188}"
 PYTHON="${PYTHON:-python3}"
+PROBE_TIMEOUT="${PROBE_TIMEOUT:-30}"  # seconds allowed to read the head and tail of each Vault model
+HF_FALLBACK="${HF_FALLBACK:-1}"       # 1 = download unreadable Vault models from Hugging Face; 0 = abort
+HF_REPO="${HF_REPO:-Comfy-Org/MiniMax-H3}"
 
 [[ -d "${VAULT}/models" ]] || die "${VAULT}/models not found; verify your vault mount before running."
 [[ -d /workspace ]] || die '/workspace not found.'
 for executable in git "${PYTHON}"; do command -v "$executable" >/dev/null || die "Missing command: $executable"; done
 [[ "$MODEL_MODE" == copy || "$MODEL_MODE" == symlink ]] || die 'MODEL_MODE must be copy or symlink.'
+[[ "$HF_FALLBACK" == 0 || "$HF_FALLBACK" == 1 ]] || die 'HF_FALLBACK must be 0 or 1.'
+
+# /vault is a FUSE mount: a damaged file can list normally while every read blocks forever.
+# Read 64 MiB from the head and tail in the background and give up after PROBE_TIMEOUT seconds.
+# A plain `timeout dd` is not enough because a reader stuck in FUSE may never be reaped.
+probe_readable() {
+  local src=$1 size skip pid t
+  size=$(stat -c '%s' "$src")
+  skip=$(( size / 16777216 - 4 )); (( skip > 0 )) || skip=0
+  ( dd if="$src" of=/dev/null bs=16M count=4 status=none &&
+    dd if="$src" of=/dev/null bs=16M skip="$skip" count=4 status=none ) 2>/dev/null &
+  pid=$!
+  for (( t = 0; t < PROBE_TIMEOUT * 5; t++ )); do
+    if ! kill -0 "$pid" 2>/dev/null; then wait "$pid"; return; fi
+    sleep 0.2
+  done
+  kill -9 "$pid" 2>/dev/null || true
+  disown "$pid" 2>/dev/null || true
+  return 124
+}
+
+# Download a model from Hugging Face into its ComfyUI path (same relative path as the HF repo),
+# resuming partial downloads, then verify SHA256 against the LFS oid. `hf download` stalled in
+# testing, so this uses curl with a minimum speed so a dead connection is retried, not waited on.
+fetch_from_hf() {
+  local dest=$1 rel meta expected_sha expected_size tmp have free attempt
+  rel="${dest#"${COMFY_DIR}/models/"}"
+  command -v curl >/dev/null || die "curl is required to download ${rel} from Hugging Face."
+  meta=$(curl -fsS --max-time 60 --retry 3 "https://huggingface.co/api/models/${HF_REPO}/tree/main/$(dirname "$rel")" |
+    "$PYTHON" -c '
+import json, sys
+for entry in json.load(sys.stdin):
+    if entry.get("path") == sys.argv[1] and entry.get("lfs"):
+        print(entry["lfs"]["oid"], entry["size"]); break
+else:
+    sys.exit(1)
+' "$rel") || die "${rel} is not listed in huggingface.co/${HF_REPO}; fix or re-upload the Vault copy manually."
+  read -r expected_sha expected_size <<< "$meta"
+
+  tmp="${dest}.hf.partial"
+  have=$(stat -c '%s' "$tmp" 2>/dev/null || echo 0)
+  if (( have > expected_size )); then rm -f "$tmp"; have=0; fi
+  free=$(df -B1 --output=avail "$(dirname "$dest")" | tail -n 1 | tr -d ' ')
+  if (( free < expected_size - have + 8 * 1024 * 1024 * 1024 )); then
+    die "Insufficient SSD to download ${rel} ($(( expected_size / 1024 / 1024 / 1024 )) GiB + 8 GiB reserve)."
+  fi
+  [[ ! -L "$dest" ]] || rm "$dest"
+
+  log "Downloading ${rel} from huggingface.co/${HF_REPO} ($(( expected_size / 1024 / 1024 )) MiB)"
+  for (( attempt = 1; attempt <= 5; attempt++ )); do
+    have=$(stat -c '%s' "$tmp" 2>/dev/null || echo 0)
+    (( have < expected_size )) || break
+    curl -fL -C - --retry 5 --speed-limit 1000000 --speed-time 60 \
+      -o "$tmp" "https://huggingface.co/${HF_REPO}/resolve/main/${rel}" && break
+    log "Download attempt ${attempt} for ${rel} failed; resuming"
+  done
+  have=$(stat -c '%s' "$tmp" 2>/dev/null || echo 0)
+  (( have == expected_size )) || die "Download of ${rel} incomplete (${have}/${expected_size} bytes). Re-run to resume."
+
+  log "Verifying SHA256 of ${rel}"
+  if [[ "$(sha256sum "$tmp" | cut -d ' ' -f 1)" != "$expected_sha" ]]; then
+    rm -f "$tmp"
+    die "SHA256 mismatch for ${rel}; deleted the download. Re-run to retry."
+  fi
+  mv -f "$tmp" "$dest"
+}
 log "Vault: ${VAULT}; ComfyUI: ${COMFY_DIR}; model mode: ${MODEL_MODE}"
 
 # Never replace an existing ComfyUI checkout without approval.
@@ -110,16 +180,26 @@ log "Installing ${#sources[@]} H3 model file(s) into ComfyUI (${MODEL_MODE})"
 for i in "${!sources[@]}"; do
   src="${sources[$i]}"; dest="${targets[$i]}"
   mkdir -p "$(dirname "$dest")"
+  # Local files never touch the Vault again, so check them before probing.
   if [[ "$MODEL_MODE" == symlink ]]; then
-    if [[ -L "$dest" ]] && [[ "$(readlink "$dest")" == "$src" ]]; then continue; fi
     if [[ -e "$dest" && ! -L "$dest" ]]; then
       log "Local file exists (will not replace): $dest"
       continue
     fi
-    ln -sfn "$src" "$dest"
   else
     src_size=$(stat -c '%s' "$src")
-    if [[ -f "$dest" ]] && [[ "$(stat -c '%s' "$dest")" == "$src_size" ]]; then continue; fi
+    if [[ -f "$dest" && ! -L "$dest" ]] && [[ "$(stat -c '%s' "$dest")" == "$src_size" ]]; then continue; fi
+  fi
+  if ! probe_readable "$src"; then
+    printf '\n[H3 setup ERROR] Vault file is unreadable (read failed or timed out after %ss): %s\n' "$PROBE_TIMEOUT" "$src" >&2
+    (( HF_FALLBACK == 1 )) || die "Fix or re-upload ${src}, or re-run with HF_FALLBACK=1 to download it from Hugging Face."
+    fetch_from_hf "$dest"
+    continue
+  fi
+  if [[ "$MODEL_MODE" == symlink ]]; then
+    if [[ -L "$dest" ]] && [[ "$(readlink "$dest")" == "$src" ]]; then continue; fi
+    ln -sfn "$src" "$dest"
+  else
     [[ ! -L "$dest" ]] || rm "$dest"
     log "Copying $(basename "$src") to SSD"
     tmp="${dest}.partial"
