@@ -36,7 +36,7 @@
    bash setup-h3.sh
    ```
 
-   第一次會安裝 PyTorch（CUDA 13.0）和相依套件、把模型複製到 SSD、啟動 ComfyUI，並等它回應 `/system_stats`，最多等 120 秒。沒起來的話會印出 `comfyui.log` 最後 40 行並以非零碼結束。重跑是安全的：已完成的步驟會跳過。
+   第一次會安裝 PyTorch（CUDA 13.0）和相依套件，同時在背景把模型下載或複製到 SSD（進度在 `$COMFY_DIR/models-setup.log`），兩邊都完成後啟動 ComfyUI，並等它回應 `/system_stats`，最多等 120 秒。沒起來的話會印出 `comfyui.log` 最後 40 行並以非零碼結束。重跑是安全的：已完成的步驟會跳過。
 
 3. 在 GPUtw 主控台開放 HTTP port `8188`，用 GPUtw 給的網址開 ComfyUI。
 
@@ -55,7 +55,9 @@
 | `MODEL_MODE` | `copy` | `setup-h3.sh` | `copy`：複製到本機 SSD；`symlink`：建連結，直接從 `/vault` 讀。見下方〈MODEL_MODE〉 |
 | `PROBE_TIMEOUT` | `30` | `setup-h3.sh` | 每個 Vault 模型讀取探測（開頭和結尾各 64 MiB）的逾時秒數 |
 | `HF_FALLBACK` | `1` | `setup-h3.sh` | `1`：探測失敗的檔案改從 Hugging Face 下載並比對 SHA256；`0`：直接報錯停止 |
-| `HF_REPO` | `Comfy-Org/MiniMax-H3` | `setup-h3.sh` | 備援下載用的 Hugging Face repo |
+| `HF_REPO` | `Comfy-Org/MiniMax-H3` | `setup-h3.sh` | 模型下載和備援用的 Hugging Face repo |
+| `MODEL_SOURCE` | `auto` | `setup-h3.sh` | `copy` 模式下模型從哪裡來。`auto`：裝得起 `aria2c` 就從 Hugging Face 多線下載，否則從 `/vault` 複製；`hf`：一律從 Hugging Face（沒有 `aria2c` 就用 `curl`）；`vault`：一律從 `/vault` 複製。HF 上沒有的檔案（例如自訂 LoRA）一律從 `/vault` 複製 |
+| `HF_CONNECTIONS` | `16` | `setup-h3.sh` | `aria2c` 每個檔案同時開幾條連線 |
 
 範例：
 
@@ -104,7 +106,9 @@ bash h3-ctl.sh interrupt
 
 只有 SSD 放不下時才用 `symlink`。
 
-兩種模式在放置模型之前，都會先對每個 Vault 檔案做讀取探測。探測失敗時：`HF_FALLBACK=1` 就從 Hugging Face 下載到 ComfyUI 的 models 目錄，並比對 LFS 的 SHA256；`HF_FALLBACK=0` 就印出檔名並停止。
+`copy` 模式下，模型預設從 Hugging Face 用 `aria2c` 多線下載（`MODEL_SOURCE=auto`），下載完比對 LFS 的 SHA256；`/vault` 只用來列出要哪些檔案，以及提供 HF 上沒有的檔案。原因是 2026-10-25 實測 `/vault` 讀取只有 9–40 MB/s，單條 `curl` 連 HF 約 12 MB/s；多線下載在 GPUtw 上的實際速度還沒量過。想回到從 `/vault` 複製，用 `MODEL_SOURCE=vault`。下載在背景進行，同時前景安裝 Python 套件。
+
+從 `/vault` 複製或建連結之前，都會先對每個 Vault 檔案做讀取探測。探測失敗時：`HF_FALLBACK=1` 就從 Hugging Face 下載到 ComfyUI 的 models 目錄，並比對 LFS 的 SHA256；`HF_FALLBACK=0` 就印出檔名並停止。
 
 ## 實測數據
 
