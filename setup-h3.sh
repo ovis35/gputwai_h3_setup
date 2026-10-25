@@ -275,8 +275,22 @@ else
     --output-directory "$OUTPUT_DIR" \
     > "${COMFY_DIR}/comfyui.log" 2>&1 < /dev/null &
   echo $! > "${COMFY_DIR}/comfyui.pid"
+
+  # Same health check as `h3-ctl.sh restart`: fail loudly instead of leaving a dead server behind.
+  command -v curl >/dev/null || die 'curl is required for the startup health check.'
+  comfy_pid=$(cat "${COMFY_DIR}/comfyui.pid")
+  deadline=$(( SECONDS + 120 ))
+  until curl -fsS --max-time 2 "http://127.0.0.1:${PORT}/system_stats" >/dev/null 2>&1; do
+    if ! kill -0 "$comfy_pid" 2>/dev/null || (( SECONDS >= deadline )); then
+      printf '\n[H3 setup ERROR] ComfyUI (PID %s) did not come up on port %s. Last 40 log lines:\n' "$comfy_pid" "$PORT" >&2
+      tr '\r' '\n' < "${COMFY_DIR}/comfyui.log" | tail -n 40 >&2
+      exit 1
+    fi
+    sleep 2
+  done
+  log "PID ${comfy_pid}: ComfyUI is up on port ${PORT}"
 fi
 
-log "Startup launched. Check: tail -n 60 ${COMFY_DIR}/comfyui.log"
+log "Logs: tail -n 60 ${COMFY_DIR}/comfyui.log; control: bash h3-ctl.sh status|restart|interrupt"
 log "ComfyUI listening on port ${PORT} (use GPUtw's port mapping/proxy)."
 log 'OpenH3-IR API endpoint and API key must be configured separately in its Setup node.'
