@@ -145,6 +145,38 @@ if [[ ! -f "${COMFY_DIR}/.openh3_requirements_installed" ]]; then
   touch "${COMFY_DIR}/.openh3_requirements_installed"
 fi
 
+# The OpenH3-IR LLM backend adds chat_template_kwargs for local inference servers.
+# OpenAI's Chat Completions API rejects that non-standard argument with HTTP 400.
+# Apply the previously verified, narrowly scoped fix on every bootstrap (idempotent).
+log 'Checking OpenH3-IR OpenAI API compatibility patch'
+"$VENV_PYTHON" - <<'PY'
+from pathlib import Path
+import py_compile
+import h3ir.backend
+
+path = Path(h3ir.backend.__file__)
+source = path.read_text()
+old = '        if not thinking:\n            # The ONLY spelling that works.'
+new = ('        if not thinking and not self.base_url().startswith("https://api.openai.com/"):\n'
+       '            # The ONLY spelling that works.')
+
+if new in source:
+    print('[H3 setup] OpenAI compatibility patch already present')
+elif source.count(old) == 1:
+    backup = path.with_suffix('.py.bak')
+    if not backup.exists():
+        backup.write_text(source)
+    path.write_text(source.replace(old, new, 1))
+    print('[H3 setup] Applied OpenAI compatibility patch to', path)
+else:
+    raise SystemExit(
+        '[H3 setup ERROR] OpenH3-IR backend changed upstream: patch anchor not found '
+        'uniquely. Refusing to continue until reviewed.'
+    )
+
+py_compile.compile(str(path), doraise=True)
+PY
+
 # Retain editable user data and rendered outputs across rentals.
 USER_DIR="${VAULT}/comfyui-user-h3"
 INPUT_DIR="${VAULT}/comfyui-input"
