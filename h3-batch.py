@@ -5,7 +5,7 @@
       Save the newest OpenH3-IR prompt that ComfyUI ran (from /history) as a template.
       Run your workflow once in the UI first; a compile-only run (SaveVideo muted) is enough.
 
-  python3 h3-batch.py submit MANIFEST --mode compile|render [--only NAME,...] [--tag m1] [--start-take N] [--dry-run]
+  python3 h3-batch.py submit MANIFEST --mode compile|render [--only NAME,...] [--tag m1] [--start-take N] [--front] [--dry-run]
       compile: queue each shot once without SaveVideo, so only the brief is written (~1 min each).
       render:  queue each shot `takes` times with SaveVideo enabled and a different noise seed per take.
 
@@ -221,7 +221,10 @@ def cmd_submit(args):
         if args.dry_run:
             print(f"[dry-run] {args.mode} {label}: prefix={prefix} noise_seed={seed} nodes={len(p)}")
             continue
-        r = api("/prompt", {"prompt": p, "extra_data": extra, "client_id": "h3-batch"})
+        body = {"prompt": p, "extra_data": extra, "client_id": "h3-batch"}
+        if args.front:
+            body["front"] = True
+        r = api("/prompt", body)
         if r.get("node_errors"):
             die(f"{label}: node errors {json.dumps(r['node_errors'], ensure_ascii=False)[:1500]}")
         rec = {"time": time.strftime("%Y-%m-%d %H:%M:%S"), "mode": args.mode, "name": s["name"], "take": take,
@@ -294,6 +297,8 @@ def main():
     s.add_argument("--only", help="comma-separated shot names")
     s.add_argument("--tag", help="added to output names, e.g. a machine id when several pods share /vault")
     s.add_argument("--dry-run", action="store_true")
+    s.add_argument("--front", action="store_true",
+                   help="put these prompts at the front of the queue (e.g. quick compiles while renders wait)")
     s.add_argument("--start-take", type=int, default=1,
                    help="number the takes from N (each take number has its own noise seed), to add takes later")
     s.add_argument("--no-file-check", action="store_true", help="skip checking media files under INPUT_DIR")
