@@ -3,7 +3,7 @@
 # Run: bash setup-h3.sh
 # Optional: MODEL_MODE=symlink bash setup-h3.sh
 # Optional: HF_FALLBACK=0 bash setup-h3.sh  (fail instead of downloading unreadable Vault files from Hugging Face)
-# Optional: MODEL_SOURCE=vault bash setup-h3.sh  (copy models from /vault instead of downloading them from Hugging Face)
+# Optional: MODEL_SOURCE=hf bash setup-h3.sh  (download models from Hugging Face instead of copying them from /vault)
 # Checked for Bash syntax; deployment on GPUtw requires running on that instance.
 set -Eeuo pipefail
 
@@ -22,7 +22,7 @@ PYTHON="${PYTHON:-python3}"
 PROBE_TIMEOUT="${PROBE_TIMEOUT:-30}"  # seconds allowed to read the head and tail of each Vault model
 HF_FALLBACK="${HF_FALLBACK:-1}"       # 1 = download unreadable Vault models from Hugging Face; 0 = abort
 HF_REPO="${HF_REPO:-Comfy-Org/MiniMax-H3}"
-MODEL_SOURCE="${MODEL_SOURCE:-auto}"    # auto = Hugging Face via aria2c when available, else /vault; hf; vault
+MODEL_SOURCE="${MODEL_SOURCE:-vault}"   # vault (default, ~35-42 MB/s measured); hf = Hugging Face via aria2c or curl; auto = hf when aria2c is available
 HF_CONNECTIONS="${HF_CONNECTIONS:-16}"  # parallel connections per file for aria2c
 
 [[ -d "${VAULT}/models" ]] || die "${VAULT}/models not found; verify your vault mount before running."
@@ -101,7 +101,7 @@ fetch_from_hf() {
     (( have < expected_size )) || break
     if command -v aria2c >/dev/null; then
       aria2c -x "$HF_CONNECTIONS" -s "$HF_CONNECTIONS" -k 16M --continue=true --file-allocation=none \
-        --max-tries=10 --retry-wait=5 --lowest-speed-limit=1M --summary-interval=60 --console-log-level=warn \
+        --max-tries=10 --retry-wait=5 --summary-interval=60 --console-log-level=warn \
         -d "$(dirname "$tmp")" -o "$(basename "$tmp")" "https://huggingface.co/${HF_REPO}/resolve/main/${rel}" && break
     else
       curl -fL -C - --retry 5 --speed-limit 1000000 --speed-time 60 \

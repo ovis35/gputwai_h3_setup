@@ -56,7 +56,7 @@
 | `PROBE_TIMEOUT` | `30` | `setup-h3.sh` | 每個 Vault 模型讀取探測（開頭和結尾各 64 MiB）的逾時秒數 |
 | `HF_FALLBACK` | `1` | `setup-h3.sh` | `1`：探測失敗的檔案改從 Hugging Face 下載並比對 SHA256；`0`：直接報錯停止 |
 | `HF_REPO` | `Comfy-Org/MiniMax-H3` | `setup-h3.sh` | 模型下載和備援用的 Hugging Face repo |
-| `MODEL_SOURCE` | `auto` | `setup-h3.sh` | `copy` 模式下模型從哪裡來。`auto`：裝得起 `aria2c` 就從 Hugging Face 多線下載，否則從 `/vault` 複製；`hf`：一律從 Hugging Face（沒有 `aria2c` 就用 `curl`）；`vault`：一律從 `/vault` 複製。HF 上沒有的檔案（例如自訂 LoRA）一律從 `/vault` 複製 |
+| `MODEL_SOURCE` | `vault` | `setup-h3.sh` | `copy` 模式下模型從哪裡來。`vault`：從 `/vault` 複製；`hf`：從 Hugging Face 下載（有 `aria2c` 就用，沒有就用 `curl`），比對 SHA256；`auto`：裝得起 `aria2c` 就用 `hf`，否則 `vault`。HF 上沒有的檔案（例如自訂 LoRA）一律從 `/vault` 複製 |
 | `HF_CONNECTIONS` | `16` | `setup-h3.sh` | `aria2c` 每個檔案同時開幾條連線 |
 
 範例：
@@ -106,7 +106,7 @@ bash h3-ctl.sh interrupt
 
 只有 SSD 放不下時才用 `symlink`。
 
-`copy` 模式下，模型預設從 Hugging Face 用 `aria2c` 多線下載（`MODEL_SOURCE=auto`），下載完比對 LFS 的 SHA256；`/vault` 只用來列出要哪些檔案，以及提供 HF 上沒有的檔案。原因是 2026-10-25 實測 `/vault` 讀取只有 9–40 MB/s，單條 `curl` 連 HF 約 12 MB/s；多線下載在 GPUtw 上的實際速度還沒量過。想回到從 `/vault` 複製，用 `MODEL_SOURCE=vault`。下載在背景進行，同時前景安裝 Python 套件。
+`copy` 模式下，模型預設從 `/vault` 複製（`MODEL_SOURCE=vault`），在背景進行，同時前景安裝 Python 套件。2026-10-26 在 RTX 5090 上實測：`/vault` 讀取約 35–42 MB/s，42 GB 模型約 20 分鐘；套件安裝約 7 分鐘，跟複製同時進行，開機到 ComfyUI 起來共約 21 分鐘。同一天 `aria2c` 開 16 條連線從 Hugging Face 下載，總速度只有約 10 MB/s（每條不到 1 MB/s，HF CDN 看起來是限制整台機器的總流量），所以 HF 只在 `/vault` 有問題時才用：`MODEL_SOURCE=hf`，或讀取探測失敗時的 `HF_FALLBACK`。
 
 從 `/vault` 複製或建連結之前，都會先對每個 Vault 檔案做讀取探測。探測失敗時：`HF_FALLBACK=1` 就從 Hugging Face 下載到 ComfyUI 的 models 目錄，並比對 LFS 的 SHA256；`HF_FALLBACK=0` 就印出檔名並停止。
 
