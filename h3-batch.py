@@ -5,7 +5,7 @@
       Save the newest OpenH3-IR prompt that ComfyUI ran (from /history) as a template.
       Run your workflow once in the UI first; a compile-only run (SaveVideo muted) is enough.
 
-  python3 h3-batch.py submit MANIFEST --mode compile|render [--only NAME,...] [--tag m1] [--dry-run]
+  python3 h3-batch.py submit MANIFEST --mode compile|render [--only NAME,...] [--tag m1] [--start-take N] [--dry-run]
       compile: queue each shot once without SaveVideo, so only the brief is written (~1 min each).
       render:  queue each shot `takes` times with SaveVideo enabled and a different noise seed per take.
 
@@ -207,7 +207,8 @@ def cmd_submit(args):
             continue
         s = shot_settings(m, shot, mpath.parent)
         takes = 1 if args.mode == "compile" else int(s["takes"])
-        for take in range(1, takes + 1):
+        first = 1 if args.mode == "compile" else args.start_take
+        for take in range(first, first + takes):
             tag = f"_{args.tag}" if args.tag else ""
             prefix = f"{root}/{s['name']}_t{take}{tag}"
             p, extra, seed = build_prompt(tpl, s, args.mode, take, prefix, check_files=not args.no_file_check)
@@ -293,6 +294,8 @@ def main():
     s.add_argument("--only", help="comma-separated shot names")
     s.add_argument("--tag", help="added to output names, e.g. a machine id when several pods share /vault")
     s.add_argument("--dry-run", action="store_true")
+    s.add_argument("--start-take", type=int, default=1,
+                   help="number the takes from N (each take number has its own noise seed), to add takes later")
     s.add_argument("--no-file-check", action="store_true", help="skip checking media files under INPUT_DIR")
     for name in ("previews", "status"):
         sub.add_parser(name).add_argument("manifest")
