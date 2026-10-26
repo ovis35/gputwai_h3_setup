@@ -95,6 +95,71 @@ bash h3-ctl.sh interrupt
 
 找程序的方式是逐一比對 `/proc/*/cmdline` 的參數（python + `main.py` + `--port $PORT`），不用 `pgrep -f`，所以不會誤認呼叫它的 ssh shell，也不會碰到 port `8080` 的 ComfyUI。
 
+## h3-batch.py：一次排好整批鏡頭
+
+開機時間要攤提，所以建議開機前先把一整集（或好幾集）的意圖和素材準備好，開機後一次排進佇列。`h3-batch.py` 只用 Python 標準函式庫，在 pod 上對 `http://127.0.0.1:$PORT` 操作。
+
+### 流程
+
+1. **做範本**：在 ComfyUI 介面把 OpenH3-IR workflow 照平常跑一次，SaveVideo 靜音、只編譯也可以。然後：
+
+   ```bash
+   python3 h3-batch.py capture --out /vault/h3-batch/openh3ir_template.json
+   ```
+
+   它從 `/history` 抓最新一次有 `OpenH3IRCompile` 的 prompt，存成範本。模型、Setup、Director、Render 子圖都照你介面上的設定。API 金鑰不在 workflow 裡（OpenH3-IR 放在 ComfyUI user 資料夾），所以範本不含金鑰。
+
+2. **把素材放進 input 資料夾**：清單裡的檔名是相對於 `$VAULT/comfyui-input`，例如 `openh3ir/s3/huanhuan.png`。
+
+3. **只編譯一輪，審提示詞**：
+
+   ```bash
+   python3 h3-batch.py submit /vault/h3-batch/EP5.json --mode compile
+   python3 h3-batch.py previews /vault/h3-batch/EP5.json
+   ```
+
+   每支約 1 分鐘。`previews` 把 GPT 寫好的 brief 存成 `EP5.previews.md`。
+
+4. **整批生成**：
+
+   ```bash
+   python3 h3-batch.py submit /vault/h3-batch/EP5.json --mode render
+   python3 h3-batch.py status /vault/h3-batch/EP5.json
+   ```
+
+   每支跑 `takes` 次，每次用不同的 noise seed（由鏡頭名稱和第幾次算出，重跑可重現），compile seed 不變，所以 brief 和審過的那份一樣。輸出檔名是 `<output_prefix>/<name>_t<take>`。
+
+### 清單格式
+
+```json
+{
+  "template": "openh3ir_template.json",
+  "output_prefix": "EP5",
+  "defaults": {"seconds": 15, "aspect": "9:16", "creativity": "restrained", "silent": true,
+               "shots": 4, "spoken_language": "Chinese", "sizing": "max", "takes": 2, "compile_seed": 7},
+  "shots": [
+    {"name": "EP5-1",
+     "intent": "Traditional Japanese hand-drawn 2D cel animation. Inside @picture3, ... @speaks(\"...\") ...",
+     "media": {"picture1": "openh3ir/s3/girl.png",
+               "picture3": {"file": "openh3ir/s3/hall.png", "role": "setting"}}}
+  ]
+}
+```
+
+- `template` 是相對於清單檔的路徑。
+- 每支可以用 `intent`，或用 `intent_file` 指到一個文字檔。
+- `media` 的 key 是 Media tray 的槽位名稱，跟意圖裡的 `@picture1` 對應。只有清單列出的槽位會留下；範本裡同名槽位的 `kind`、`role`、`note` 會沿用，也可以在清單裡覆寫。用到範本沒出現過的 `role` 時會印警告，因為 role 的實際值是 OpenH3-IR 內部定義的，要在介面上確認。
+- `defaults` 和每支鏡頭都可以設：`seconds`、`aspect`、`creativity`、`silent`、`shots`、`megapixels`、`spoken_language`、`sizing`、`effort`（對應 `OpenH3IRCompile`），`takes`、`compile_seed`，以及 `steps`、`scheduler`（`BasicScheduler`）、`sampler`（`KSamplerSelect`）。沒設就用範本的值。
+
+### 選項
+
+- `--dry-run`：只列出會送出什麼，不送。
+- `--only EP5-1,EP5-3`：只跑指定的鏡頭。
+- `--tag m1`：加在輸出檔名後面。好幾台 pod 共用 `/vault` 時，每台用不同的 tag，檔名才不會互相覆蓋。
+- `--no-file-check`：不檢查素材檔是否存在（預設會檢查，缺檔就在送出前停下）。
+
+每次送出都記在清單旁的 `<清單>.submitted.jsonl`，`previews` 和 `status` 都讀這個檔。
+
 ## MODEL_MODE
 
 **`copy` 是預設也是建議值。** 模型從 `/vault` 複製到本機 SSD 一次，之後 ComfyUI 都從 SSD 讀。複製前會先檢查空間，要求「待複製大小 + 8 GiB」的剩餘空間，不夠就停下並建議改用 symlink。
