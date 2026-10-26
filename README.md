@@ -158,6 +158,28 @@ bash h3-ctl.sh interrupt
 
 每次送出都記在清單旁的 `<清單>.submitted.jsonl`，`previews` 和 `status` 都讀這個檔。
 
+## tools/：批次輔助腳本
+
+標「pod」的在 pod 上跑，連 `COMFY_URL`（預設 `http://127.0.0.1:$PORT`）；標「本機」的在自己電腦上跑。
+
+| 腳本 | 在哪跑 | 用途 |
+|---|---|---|
+| `check_shots.py MANIFEST [NAME ...]` | pod | 等每支鏡頭最新一次編譯完成，報告是否被退回成草稿（fallback）、`@speaks` 台詞是否逐字保留、每句落在哪一鏡與起始時間 |
+| `drop_pending.py MANIFEST` | pod | 把這份清單送出、還在排隊的 prompt 全部移除 |
+| `seed_try.py MANIFEST SHOT SEED ...` | pod | 為同一支鏡頭產生多個編譯 seed 的試跑清單（`try_<SHOT>_s<SEED>.json`，放在清單旁） |
+| `strip.sh VIDEO.mp4` | pod | 取 6 張等距畫格橫排成 `/tmp/strip_<名稱>.jpg`，快速看片 |
+| `vault_repair.sh LOCAL_FILE VAULT_DIR SHA256` | pod | 等佇列清空後，用本機 SSD 上驗證過的模型覆蓋 `/vault` 上讀不到的那份，讀回比對 SHA256 |
+| `pull_renders.sh DEST MANIFEST ...` | 本機 | 每 30 秒把完成的成片下載到 `DEST` 並用 md5 驗證，全部完成就停止；需設 `POD_HOST`，log 在 `DEST/_pull.log` |
+| `crop_front.py OUT_DIR name=path ...` | 本機 | 從三視圖角色設定稿裁出左上的正面全身，當參考圖用（需要 Pillow） |
+
+`pull_renders.sh` 範例（Git Bash，背景執行）：
+
+```bash
+POD_HOST=pod-xxxx@ssh.gputw.ai nohup bash tools/pull_renders.sh "/d/Hwan-hwan/Episodes/Season 3/batch/S3" /vault/h3-batch/S3_EP7-9_batch.json &
+```
+
+測試：`python -I tests/test_batch.py h3-batch.py`（用假的 ComfyUI 伺服器跑 h3-batch 端到端）。
+
 ## MODEL_MODE
 
 **`copy` 是預設也是建議值。** 模型從 `/vault` 複製到本機 SSD 一次，之後 ComfyUI 都從 SSD 讀。複製前會先檢查空間，要求「待複製大小 + 8 GiB」的剩餘空間，不夠就停下並建議改用 symlink。

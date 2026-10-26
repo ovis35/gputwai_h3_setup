@@ -1,0 +1,12 @@
+# API keys (OpenAI for OpenH3-IR, GPUtw). Never commit.
+.env
+.env.*
+
+__pycache__/
+*.pyc
+
+# Partial downloads and local outputs
+*.partial
+*.partial.aria2
+*.mp4
+*.flac
